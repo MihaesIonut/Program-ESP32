@@ -1,0 +1,152 @@
+#include <Arduino.h>
+
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#define ssid "TP-Link_13B0"
+#define password "61011557"
+#define url "http://proiectia.bogdanflorea.ro/api/better-call-saul/characters"
+#define bleServerName "serverble"
+
+bool deviceConnected = false;
+#define SERVICE_UUID "91bad492-b950-4226-aa2b-4ede9fa42f59"
+
+
+BLECharacteristic indexCharacteristic(
+  "ca73b3ba-39f6-4ab3-91ae-186dc9577d99",
+  BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
+);
+
+BLEDescriptor *indexDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+
+BLECharacteristic detailsCharacteristic(
+  "183f3323-b11f-4065-ab6e-6a13fd7b104d", 
+  BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
+);
+
+BLEDescriptor *detailsDescriptor = new BLEDescriptor(BLEUUID((uint16_t)0x2902));
+
+
+
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+    Serial.println("Device connected");
+  };
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    Serial.println("Device disconnected");
+  }
+  
+};
+
+class CharacteristicsCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) {
+      std::string data = characteristic->getValue();
+      DynamicJsonDocument bine(15000);
+      deserializeJson(bine,data.c_str());
+HTTPClient pl;
+pl.begin(url);
+
+if(pl.GET()>0)
+{
+  DynamicJsonDocument doc(15000);
+      deserializeJson(doc,pl.getString());
+       JsonArray list = doc.as<JsonArray>();
+
+    if(bine["action"]=="fetchData")
+    {for (JsonVariant value : list) {
+      JsonObject listItem = value.as<JsonObject>();
+
+      DynamicJsonDocument temporar(15000);
+      temporar["id"]=listItem["char_id"].as<String>();
+      temporar["name"]=listItem["name"].as<String>();
+      temporar["image"]=listItem["img"].as<String>();
+
+      String stringTemporar;
+      serializeJson(temporar,stringTemporar);
+      indexCharacteristic.setValue(stringTemporar.c_str());
+      indexCharacteristic.notify();}}
+
+      
+      else if(bine["action"]=="fetchDetails"){
+        for (JsonVariant value : list) {
+      JsonObject listItem = value.as<JsonObject>();
+      if(listItem["char_id"].as<String>()==bine["id"].as<String>()){
+      DynamicJsonDocument temporar(15000);
+      temporar["id"]=listItem["char_id"].as<String>();
+      temporar["name"]=listItem["name"].as<String>();
+      temporar["image"]=listItem["img"].as<String>();
+
+      String descriere="birthday:"+listItem["Birthday"].as<String>()+
+      "\n"+"Occupation:"+listItem["occupation"].as<String>()+
+      "\n"+"Status:"+listItem["status"].as<String>()+
+      "\n"+"Nickname:"+listItem["nickname"].as<String>()+
+      "\n"+"Portrayed:"+listItem["portrayed"].as<String>();
+      while(descriere.indexOf('[')!=-1)
+      descriere.remove(descriere.indexOf('['),1);
+      while(descriere.indexOf(']')!=-1)
+      descriere.remove(descriere.indexOf(']'),1);
+       while(descriere.indexOf('"')!=-1)
+      descriere.remove(descriere.indexOf('"'),1);
+      temporar["description"]=descriere;
+      String stringTemporar;
+      serializeJson(temporar,stringTemporar);
+      detailsCharacteristic.setValue(stringTemporar.c_str());
+      detailsCharacteristic.notify();}
+      }  
+    }
+    }
+    
+else
+{
+  Serial.println("eroare");
+}
+}
+};
+
+void setup() {
+  Serial.begin(115200);
+  Serial.printf("Connecting to %s ", ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+  }
+  
+  Serial.println("CONNECTED to WIFI");
+  
+
+
+
+  
+  BLEDevice::init(bleServerName);
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *bmeService = pServer->createService(SERVICE_UUID);
+  bmeService->addCharacteristic(&indexCharacteristic);  
+  indexDescriptor->setValue("Get data list");
+  indexCharacteristic.addDescriptor(indexDescriptor);
+  indexCharacteristic.setValue("Get data List");
+  indexCharacteristic.setCallbacks(new CharacteristicsCallbacks());
+
+  bmeService->addCharacteristic(&detailsCharacteristic);  
+  detailsDescriptor->setValue("Get data details");
+  detailsCharacteristic.addDescriptor(detailsDescriptor);
+  detailsCharacteristic.setValue("Get data details");
+  detailsCharacteristic.setCallbacks(new CharacteristicsCallbacks());
+  
+  bmeService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
+}
+
+void loop() {
+}
